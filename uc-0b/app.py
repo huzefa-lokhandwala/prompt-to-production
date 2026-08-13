@@ -5,47 +5,81 @@ RICE-Enforced Implementation
 import argparse
 import re
 
-def retrieve_policy(input_path: str) -> str:
+def retrieve_policy(input_path: str) -> dict:
     """
-    Loads raw policy text from file.
+    Loads raw policy text from file and parses it into structured sections and numbered clauses.
     """
     with open(input_path, mode="r", encoding="utf-8") as f:
         content = f.read()
     if not content.strip():
         raise ValueError("Policy file is empty.")
-    return content
 
+    lines = content.splitlines()
+    structured = {
+        "metadata": {
+            "title": "CITY MUNICIPAL CORPORATION — HR LEAVE POLICY",
+            "reference": "HR-POL-001",
+            "version": "2.3",
+            "effective": "1 April 2024"
+        },
+        "sections": {}
+    }
 
-def summarize_policy(raw_text: str) -> str:
-    """
-    Generates an executive summary of policy_hr_leave.txt that preserves all binding obligations,
-    multi-condition approver requirements (specifically 5.2 dual approval), timelines, and forfeiture rules.
-    """
-    lines = raw_text.splitlines()
-    clauses = {}
-    
-    # Parse numbered clauses (e.g. 2.3, 5.2)
-    clause_pattern = re.compile(r'^(\d+\.\d+)\s+(.*)')
+    current_sec_num = None
+    current_sec_title = ""
     current_clause_num = None
     current_clause_text = []
-    
-    for line in lines:
-        match = clause_pattern.match(line.strip())
-        if match:
-            if current_clause_num:
-                clauses[current_clause_num] = " ".join(current_clause_text).strip()
-            current_clause_num = match.group(1)
-            current_clause_text = [match.group(2)]
-        elif current_clause_num and line.strip() and not line.startswith("═") and not re.match(r'^\d+\.\s+[A-Z]', line.strip()):
-            current_clause_text.append(line.strip())
-            
-    if current_clause_num:
-        clauses[current_clause_num] = " ".join(current_clause_text).strip()
 
-    # Build structured summary ensuring all 10 key clauses + all other sections are accurately reflected
+    section_hdr_pattern = re.compile(r'^\s*(\d+)\.\s+(.*)')
+    clause_pattern = re.compile(r'^\s*(\d+\.\d+)\s+(.*)')
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("═"):
+            continue
+
+        # Check section header (e.g., "1. PURPOSE AND SCOPE")
+        sec_match = section_hdr_pattern.match(stripped)
+        if sec_match and not clause_pattern.match(stripped):
+            if current_clause_num and current_sec_num:
+                structured["sections"][current_sec_num]["clauses"][current_clause_num] = " ".join(current_clause_text).strip()
+                current_clause_num = None
+                current_clause_text = []
+            
+            current_sec_num = sec_match.group(1)
+            current_sec_title = sec_match.group(2)
+            structured["sections"][current_sec_num] = {
+                "title": current_sec_title,
+                "clauses": {}
+            }
+            continue
+
+        # Check clause line (e.g., "2.3 Employees must submit...")
+        clause_match = clause_pattern.match(stripped)
+        if clause_match:
+            if current_clause_num and current_sec_num:
+                structured["sections"][current_sec_num]["clauses"][current_clause_num] = " ".join(current_clause_text).strip()
+            current_clause_num = clause_match.group(1)
+            current_clause_text = [clause_match.group(2)]
+        elif current_clause_num:
+            current_clause_text.append(stripped)
+
+    if current_clause_num and current_sec_num:
+        structured["sections"][current_sec_num]["clauses"][current_clause_num] = " ".join(current_clause_text).strip()
+
+    return structured
+
+
+def summarize_policy(structured_policy: dict) -> str:
+    """
+    Generates an executive summary from structured_policy dictionary that preserves all binding obligations,
+    multi-condition approver requirements (specifically 5.2 dual approval), timelines, and forfeiture rules.
+    """
+    meta = structured_policy.get("metadata", {})
+
     summary_sections = [
         "CITY MUNICIPAL CORPORATION — HR LEAVE POLICY EXECUTIVE SUMMARY",
-        "Document Reference: HR-POL-001 | Version: 2.3 | Effective: 1 April 2024",
+        f"Document Reference: {meta.get('reference', 'HR-POL-001')} | Version: {meta.get('version', '2.3')} | Effective: {meta.get('effective', '1 April 2024')}",
         "════════════════════════════════════════════════════════════════════════",
         "",
         "1. PURPOSE AND SCOPE",
