@@ -10,28 +10,23 @@ env:
 jobs:
   commit-lint:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Fetch PR branch
-        run: |
-          git fetch origin \
-            pull/${{ github.event.pull_request.number }}/head:pr-branch
-
       - name: Check Commit Message Format
         run: |
           echo "=== Workflow version: v4-pull_request ==="
 
-          for commit in $(git rev-list --no-merges pr-branch ^origin/main); do
+          for commit in $(git rev-list --no-merges HEAD ^origin/main); do
             msg=$(git log -1 --pretty=format:%s "$commit")
+
             echo "Checking commit: $msg"
 
             if [[ ! $msg =~ ^\[?UC-[0-9A-Za-z]+\]?[[:space:]].{10,} ]]; then
               echo "Error: Commit message '$msg' does not follow the format!"
-              echo "Correct format: [UC-ID] Fix [what]: [why it failed] → [what you changed]"
-              echo "            or: [UC-ID] [what you built or fixed]"
               exit 1
             fi
           done
@@ -40,6 +35,7 @@ jobs:
 
   smoke-test:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v6
 
