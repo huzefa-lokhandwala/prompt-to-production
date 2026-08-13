@@ -41,46 +41,54 @@ def classify_complaint(row: dict) -> dict:
     # 1. Priority Determination (Severity Keyword Rule)
     priority = "Standard"
     for kw in SEVERITY_KEYWORDS:
-        # Check for keyword as word boundary or substring
-        if re.search(r'\b' + re.escape(kw), desc_lower) or kw in desc_lower:
+        if re.search(r'\b' + re.escape(kw) + r'\b', desc_lower) or kw in desc_lower:
             priority = "Urgent"
             break
 
     # 2. Category & Ambiguity Flag Determination
-    category = "Other"
-    flag = ""
+    # Detect matching category signals
+    matches = []
 
-    # Specific category matching rules
     if "pothole" in desc_lower:
-        category = "Pothole"
-    elif "heritage" in desc_lower:
-        category = "Heritage Damage"
-        if "light" in desc_lower or "dark" in desc_lower:
-            flag = "NEEDS_REVIEW"  # Overlaps Heritage Damage and Streetlight
-    elif "drain" in desc_lower:
-        category = "Drain Blockage"
-    elif "flood" in desc_lower or "inundated" in desc_lower:
-        category = "Flooding"
-    elif "light" in desc_lower or "dark" in desc_lower or "lamp" in desc_lower:
-        category = "Streetlight"
-    elif "music" in desc_lower or "noise" in desc_lower or "loudspeaker" in desc_lower:
-        category = "Noise"
-    elif "garbage" in desc_lower or "waste" in desc_lower or "dump" in desc_lower or "dead animal" in desc_lower:
-        category = "Waste"
-        if "dead animal" in desc_lower:
-            flag = "NEEDS_REVIEW"  # Non-standard sanitation waste complaint
-    elif "heat" in desc_lower or "sunstroke" in desc_lower:
-        category = "Heat Hazard"
-    elif "road" in desc_lower or "footpath" in desc_lower or "manhole" in desc_lower or "tiles" in desc_lower:
-        category = "Road Damage"
+        matches.append("Pothole")
+    if "drain" in desc_lower:
+        matches.append("Drain Blockage")
+    if "flood" in desc_lower or "inundated" in desc_lower:
+        matches.append("Flooding")
+    if "light" in desc_lower or "dark" in desc_lower or "lamp" in desc_lower:
+        matches.append("Streetlight")
+    if "music" in desc_lower or "noise" in desc_lower or "loudspeaker" in desc_lower:
+        matches.append("Noise")
+    if "garbage" in desc_lower or "waste" in desc_lower or "dump" in desc_lower or "dead animal" in desc_lower:
+        matches.append("Waste")
+    if "heat" in desc_lower or "sunstroke" in desc_lower:
+        matches.append("Heat Hazard")
+    if ("road surface" in desc_lower or "cracked" in desc_lower or "sinking" in desc_lower or "footpath" in desc_lower or "manhole" in desc_lower or "tiles" in desc_lower or "pavement" in desc_lower) and "pothole" not in desc_lower:
+        matches.append("Road Damage")
+
+    # Handle structural / contextual heritage case: contextual term "heritage" does not override operational category like Streetlight
+    if "heritage" in desc_lower and "Heritage Damage" not in matches:
+        if not matches:
+            matches.append("Heritage Damage")
+
+    # Deduplicate matches while preserving order
+    unique_matches = list(dict.fromkeys(matches))
+
+    flag = ""
+    if len(unique_matches) == 1:
+        category = unique_matches[0]
+    elif len(unique_matches) > 1:
+        # Ambiguous case: overlaps multiple operational categories
+        category = "Other"
+        flag = "NEEDS_REVIEW"
     else:
         category = "Other"
         flag = "NEEDS_REVIEW"
 
     # 3. Reason Generation (One sentence citing specific verbatim words)
-    # Extract the first sentence or meaningful clause from description
-    first_clause = desc.split(".")[0].strip() if "." in desc else desc
-    reason = f"Cited '{first_clause}' from the complaint description."
+    # Extract key phrase or first sentence
+    clause = desc.split(".")[0].strip() if "." in desc else desc
+    reason = f"Cited '{clause}' from complaint description."
 
     return {
         "complaint_id": row.get("complaint_id"),
