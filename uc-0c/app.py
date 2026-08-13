@@ -7,6 +7,7 @@ import csv
 import sys
 
 FORMULA_MOM_STR = "((actual_spend_current - actual_spend_prev) / actual_spend_prev) * 100"
+FORMULA_YOY_STR = "((actual_spend_current - actual_spend_yoy) / actual_spend_yoy) * 100"
 
 def load_dataset(input_path: str):
     """
@@ -18,6 +19,10 @@ def load_dataset(input_path: str):
 
     with open(input_path, mode="r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
+        required_cols = {"period", "ward", "category", "budgeted_amount", "actual_spend", "notes"}
+        if not required_cols.issubset(set(reader.fieldnames or [])):
+            raise ValueError(f"Dataset missing required columns. Must contain: {required_cols}")
+
         for i, row in enumerate(reader, start=2):  # Line number including header
             raw_spend = row["actual_spend"].strip()
             if not raw_spend:
@@ -30,7 +35,17 @@ def load_dataset(input_path: str):
                     "notes": row["notes"]
                 })
             else:
-                parsed_spend = float(raw_spend)
+                try:
+                    parsed_spend = float(raw_spend)
+                except ValueError:
+                    parsed_spend = None
+                    null_rows.append({
+                        "line": i,
+                        "period": row["period"],
+                        "ward": row["ward"],
+                        "category": row["category"],
+                        "notes": f"Invalid float value: {raw_spend}"
+                    })
 
             rows.append({
                 "period": row["period"],
@@ -58,7 +73,8 @@ def compute_growth(rows: list, ward: str, category: str, growth_type: str) -> li
     if not growth_type:
         raise ValueError("REFUSAL: Growth calculation type (--growth-type) is required. Please specify 'MoM' or 'YoY'.")
     
-    if growth_type.upper() not in ["MOM", "YOY"]:
+    gt_upper = growth_type.upper()
+    if gt_upper not in ["MOM", "YOY"]:
         raise ValueError(f"REFUSAL: Unsupported growth_type '{growth_type}'. Allowed values: 'MoM', 'YoY'.")
 
     if not ward or not category or "ALL" in ward.upper() or "ALL" in category.upper():
@@ -71,30 +87,64 @@ def compute_growth(rows: list, ward: str, category: str, growth_type: str) -> li
     if not filtered:
         raise ValueError(f"No records found for Ward '{ward}' and Category '{category}'.")
 
+    # Map period -> row for fast YoY lookup
+    period_map = {r["period"]: r for r in filtered}
+
     results = []
     
     for i, curr in enumerate(filtered):
         curr_spend = curr["actual_spend"]
-        
+        curr_period = curr["period"]
+
         if curr_spend is None:
-            growth_str = "N/A"
-            formula_used = "N/A (Null spend)"
-            display_spend = "NULL"
-        elif i == 0:
-            growth_str = "N/A"
-            formula_used = "N/A (Initial Period)"
-            display_spend = f"{curr_spend:.1f}"
+            growth_str = f"N/A (Null Value Flagged: {curr['notes']})"
+            formula_used = "N/A (Null Spend)"
+            display_spend = f"NULL (Flagged: {curr['notes']})"
         else:
-            prev_spend = filtered[i-1]["actual_spend"]
             display_spend = f"{curr_spend:.1f}"
-            
-            if prev_spend is None or prev_spend == 0:
-                growth_str = "N/A"
-                formula_used = "N/A (Previous Period Null or Zero)"
-            else:
-                pct = ((curr_spend - prev_spend) / prev_spend) * 100
-                growth_str = f"{pct:+.1f}%"
-                formula_used = FORMULA_MOM_STR
+
+            if gt_upper == "MOM":
+                if i == 0:
+                    growth_str = "N/A"
+                    formula_used = "N/A (Initial Period)"
+                else:
+                    prev_spend = filtered[i-1]["actual_spend"]
+                    if prev_spend is None:
+                        growth_str = f"N/A (Previous Period Null)"
+                        formula_used = "N/A (Previous Period Null)"
+                    elif prev_spend == 0:
+                        growth_str = "N/A (Division by Zero)"
+                        formula_used = "N/A (Zero Previous Spend)"
+                    else:
+                        pct = ((curr_spend - prev_spend) / prev_spend) * 100
+                        growth_str = f"{pct:+.1f}%"
+                        formula_used = FORMULA_MOM_STR
+
+            elif gt_upper == "YOY":
+                # Find prior year period (YYYY-MM -> (YYYY-1)-MM)
+                try:
+                    year, month = curr_period.split("-")
+                    prior_period = f"{int(year)-1:04d}-{month}"
+                except Exception:
+                    prior_period = None
+
+                prior_row = period_map.get(prior_period) if prior_period else None
+
+                if not prior_row:
+                    growth_str = "N/A"
+                    formula_used = "N/A (No Prior Year Data)"
+                else:
+                    prior_spend = prior_row["actual_spend"]
+                    if prior_spend is None:
+                        growth_str = "N/A (Previous Period Null)"
+                        formula_used = "N/A (Previous Period Null)"
+                    elif prior_spend == 0:
+                        growth_str = "N/A (Division by Zero)"
+                        formula_used = "N/A (Zero Prior Year Spend)"
+                    else:
+                        pct = ((curr_spend - prior_spend) / prior_spend) * 100
+                        growth_str = f"{pct:+.1f}%"
+                        formula_used = FORMULA_YOY_STR
 
         results.append({
             "period": curr["period"],
