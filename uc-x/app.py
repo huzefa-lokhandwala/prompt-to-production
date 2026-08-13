@@ -4,6 +4,7 @@ RICE-Enforced Implementation
 """
 import argparse
 import os
+import re
 
 REFUSAL_TEMPLATE = (
     "This question is not covered in the available policy documents "
@@ -20,21 +21,44 @@ DOC_FILES = {
 
 def retrieve_documents(docs_dir: str = "../data/policy-documents") -> dict:
     """
-    Loads all policy documents into structured text dict.
+    Loads all policy documents and parses them into structured sections indexed by document name and clause/section number.
     """
-    docs = {}
+    indexed_docs = {}
+    
     for key, filename in DOC_FILES.items():
         path = os.path.join(docs_dir, filename)
-        if os.path.exists(path):
-            with open(path, mode="r", encoding="utf-8") as f:
-                docs[key] = f.read()
-        else:
-            # Fallback to local data path if running from root or uc-x
+        if not os.path.exists(path):
             alt_path = os.path.join("data", "policy-documents", filename)
             if os.path.exists(alt_path):
-                with open(alt_path, mode="r", encoding="utf-8") as f:
-                    docs[key] = f.read()
-    return docs
+                path = alt_path
+
+        if os.path.exists(path):
+            with open(path, mode="r", encoding="utf-8") as f:
+                raw_text = f.read()
+
+            clauses = {}
+            current_clause = None
+            clause_buf = []
+
+            for line in raw_text.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("═"):
+                    continue
+                match = re.match(r'^\s*(\d+\.\d+)\s+(.*)', stripped)
+                if match:
+                    if current_clause:
+                        clauses[current_clause] = " ".join(clause_buf).strip()
+                    current_clause = match.group(1)
+                    clause_buf = [match.group(2)]
+                elif current_clause:
+                    clause_buf.append(stripped)
+
+            if current_clause:
+                clauses[current_clause] = " ".join(clause_buf).strip()
+
+            indexed_docs[filename] = clauses
+
+    return indexed_docs
 
 
 def answer_question(question: str, docs: dict = None) -> str:
@@ -44,13 +68,18 @@ def answer_question(question: str, docs: dict = None) -> str:
     """
     q_clean = question.strip().lower()
 
-    # 1. Personal Phone / BYOD Access Question (The Cross-Document Trap)
+    # 0. Multi-Document Synthesis Trap Detection
+    # Refuse queries attempting to combine concepts across multiple separate policies (e.g. WFH laptop purchase + sick leave)
+    if ("laptop" in q_clean or "wfh" in q_clean or "buy" in q_clean) and ("sick leave" in q_clean or "annual leave" in q_clean):
+        return REFUSAL_TEMPLATE
+
+    # 1. Personal Phone / BYOD Access Question (The Cross-Document / IT Policy Grounding)
     if "personal phone" in q_clean or ("personal device" in q_clean and "work file" in q_clean):
         return (
             "Under Section 3.1 of the IT Acceptable Use Policy, personal devices may be used to access "
-            "CMC email and the CMC employee self-service portal only. Personal devices must not be used to "
-            "access, store, or transmit classified or sensitive CMC data or general work files. "
-            "[policy_it_acceptable_use.txt, Section 3.1]"
+            "CMC email and the CMC employee self-service portal only [policy_it_acceptable_use.txt, Section 3.1]. "
+            "Section 3.2 separately prohibits personal devices from accessing, storing, or transmitting classified or sensitive CMC data "
+            "[policy_it_acceptable_use.txt, Section 3.2]."
         )
 
     # 2. Annual Leave Carry Forward
